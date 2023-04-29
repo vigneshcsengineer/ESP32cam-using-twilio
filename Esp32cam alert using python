@@ -1,0 +1,87 @@
+import urllib.request
+import cv2 as cv
+import numpy as np
+from twilio.rest import Client
+
+# Set up Twilio account credentials
+account_sid = 'Enter your twilio id'
+auth_token = 'Enter your twilio token'
+client = Client(account_sid, auth_token)
+twilio_number = 'Enter your twilio phone number'
+destination_number = 'Enter your phone number'
+
+# IP camera URL
+url = 'http://192.168.5.110/capture?' ##enter your esp32cam ip address
+
+# Initialize variables
+frame1 = None
+motion_detected = False
+
+print('START')
+
+while True:
+    # Read image from IP camera using HTTP
+    imgResponse = urllib.request.urlopen(url)
+    imgNp = np.array(bytearray(imgResponse.read()), dtype=np.uint8)
+    frame2 = cv.imdecode(imgNp, -1)
+
+    # If there's an error reading from camera, break loop
+    if frame2 is None:
+        break
+
+    # Convert to grayscale and blur
+    gray = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
+    gray = cv.GaussianBlur(gray, (21, 21), 0)
+
+    # If there's no previous frame, set current frame as previous frame and continue loop
+    if frame1 is None:
+        frame1 = gray
+        continue
+
+    # Compute absolute difference between current and previous frame
+    frame_delta = cv.absdiff(frame1, gray)
+
+    # Apply thresholding to eliminate noise and convert to binary image
+    thresh = cv.threshold(frame_delta, 25, 255, cv.THRESH_BINARY)[1]
+    thresh = cv.dilate(thresh, None, iterations=2)
+
+    # Find contours in the binary image
+    contours, _ = cv.findContours(thresh.copy(), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    # Loop over contours
+    for contour in contours:
+        # If contour area is too small, ignore it
+        if cv.contourArea(contour) < 1000:
+            continue
+
+        # Draw a bounding box around the contour and mark motion detected
+        (x, y, w, h) = cv.boundingRect(contour)
+        cv.rectangle(frame2, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        motion_detected = True
+
+    # Display current frame and motion detection status
+    cv.imshow("IP Camera", frame2)
+    cv.imshow("Thresh", thresh)
+    key = cv.waitKey(1) & 0xFF
+
+    # If 'q' is pressed, break loop
+    if key == ord("q"):
+        break
+
+    # If motion detected, send an SMS alert
+    if motion_detected:
+        print("Motion detected!")
+        message = client.messages.create(
+            body='Motion detected!',
+            from_=twilio_number,
+            to=destination_number
+        )
+        print(message.sid)
+        motion_detected = False
+
+    # Set current frame as previous frame for next iteration
+    frame1 = gray
+
+# Release VideoCapture object and close windows
+cv.destroyAllWindows()
+print('END')
